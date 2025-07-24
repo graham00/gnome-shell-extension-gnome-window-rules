@@ -1,0 +1,16 @@
+{
+  "description": "Makes windows matching user-defined titles sticky (on all workspaces), always-on-top, or both.",
+  "extension-id": "gnome-window-rules",
+  "gettext-domain": "gnome-window-rules",
+  "name": "GNOME Window Rules",
+  "settings-schema": "org.gnome.shell.extensions.gnome-window-rules",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48"
+  ],
+  "url": "https://github.com/graham00/gnome-shell-extension-gnome-window-rules",
+  "uuid": "gnome-window-rules@graham00.github.com",
+  "version": 1
+}

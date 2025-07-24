@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.gnome-window-rules" path="/org/gnome/shell/extensions/gnome-window-rules/">
+    <key name="window-rules" type="aa{sv}">
+      <default>[]</default>
+      <summary>List of window rules</summary>
+      <description>List of window rules with pattern, type, and behavior settings</description>
+    </key>
+  </schema>
+</schemalist>
