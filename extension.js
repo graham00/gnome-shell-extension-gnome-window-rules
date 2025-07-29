@@ -4,19 +4,23 @@
  */
 
 import Meta from 'gi://Meta';
+import GLib from 'gi://GLib';
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 export default class WindowRules extends Extension
 {
   enable()
   {
-    this._lastWorkspace = null;
-    this._windowAddedId = 0;
-    this._windowRemovedId = 0;
-
+    // Use WeakMap to track window state without creating strong references
+    this._windowData = new WeakMap();
+    
     this.settings = this.getSettings();
     this._settingsChangedId = this.settings.connect(
       'changed', this._onSettingsChanged.bind(this));
+
+    // Connect to display signals for window management
+    this._displayWindowCreatedId = global.display.connect(
+      'window-created', this._onWindowCreated.bind(this));
 
     this._switchWorkspaceId = global.window_manager.connect_after(
       'switch-workspace', this._onSwitchWorkspace.bind(this));
@@ -29,34 +33,31 @@ export default class WindowRules extends Extension
     this.settings = null;
 
     global.window_manager.disconnect(this._switchWorkspaceId);
+    global.display.disconnect(this._displayWindowCreatedId);
 
-    if (this._lastWorkspace) {
-      this._lastWorkspace.disconnect(this._windowAddedId);
-      this._lastWorkspace.disconnect(this._windowRemovedId);
-    }
-
-    this._lastWorkspace = null;
-    this._settingsChangedId = 0;
-    this._switchWorkspaceId = 0;
-    this._windowAddedId = 0;
-    this._windowRemovedId = 0;
-
+    // Clean up all window signal connections
     let actors = global.get_window_actors();
     if (actors) {
       for (let actor of actors) {
         let window = actor.meta_window;
         if (!window) continue;
 
-        if (window._hasWindowRules) {
-          if (window.above)
-            window.unmake_above();
-          if (window.on_all_workspaces)
-            window.unstick();
+        let windowData = this._windowData.get(window);
+        if (windowData && windowData.notifyId) {
+          try {
+            window.disconnect(windowData.notifyId);
+          } catch (e) {
+            // Window might be destroyed, ignore errors
+          }
         }
-
-        this._onWindowRemoved(null, window);
       }
     }
+
+    // Clear the WeakMap to allow garbage collection
+    this._windowData = null;
+    this._settingsChangedId = 0;
+    this._switchWorkspaceId = 0;
+    this._displayWindowCreatedId = 0;
   }
 
   _onSettingsChanged(settings, key)
@@ -71,60 +72,100 @@ export default class WindowRules extends Extension
     }
   }
 
+  _onWindowCreated(display, window)
+  {
+    // This signal is emitted when a new window is created
+    this._onWindowAdded(window);
+  }
+
   _onSwitchWorkspace()
   {
     let workspace = global.workspace_manager.get_active_workspace();
     let wsWindows = global.display.get_tab_list(Meta.TabList.NORMAL, workspace);
 
-    if (this._lastWorkspace) {
-      this._lastWorkspace.disconnect(this._windowAddedId);
-      this._lastWorkspace.disconnect(this._windowRemovedId);
-    }
-
-    this._lastWorkspace = workspace;
-    this._windowAddedId = this._lastWorkspace.connect(
-      'window-added', this._onWindowAdded.bind(this));
-    this._windowRemovedId = this._lastWorkspace.connect(
-      'window-removed', this._onWindowRemoved.bind(this));
-
-    /* Update state on already present windows */
+    /* Update state on already present windows without adding them to WeakMap */
     if (wsWindows) {
-      for (let window of wsWindows)
-        this._onWindowAdded(workspace, window);
+      for (let window of wsWindows) {
+        // Only check rules, don't add to WeakMap yet
+        this._checkWindowRules(window);
+      }
     }
   }
 
-  _onWindowAdded(workspace, window)
+  _onWindowAdded(window)
   {
-    if (!window._notifyWindowRulesId) {
-      window._notifyWindowRulesId = window.connect_after(
-        'notify::title', this._checkWindowRules.bind(this));
+    // Skip windows that are being destroyed
+    try {
+      if (!window || window.get_display() === null) {
+        return;
+      }
+    } catch (e) {
+      // Window is being destroyed
+      return;
     }
-    this._checkWindowRules(window);
-  }
 
-  _onWindowRemoved(workspace, window)
-  {
-    if (window._notifyWindowRulesId) {
-      window.disconnect(window._notifyWindowRulesId);
-      window._notifyWindowRulesId = null;
+    // Get or create window data
+    let windowData = this._windowData.get(window);
+    if (!windowData) {
+      windowData = {
+        notifyId: 0,
+        hasRules: false
+      };
+      this._windowData.set(window, windowData);
     }
-    if (window._hasWindowRules)
-      window._hasWindowRules = null;
+
+    // Connect to title changes if not already connected
+    if (!windowData.notifyId) {
+      try {
+        windowData.notifyId = window.connect_after(
+          'notify::title', this._checkWindowRules.bind(this));
+      } catch (e) {
+        // Window might be destroyed, ignore errors
+        log(`Window Rules: Error connecting to window signal: ${e.message}`);
+        return;
+      }
+    }
+
+    // Apply rules after a short delay to ensure window is fully initialized
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+      this._checkWindowRules(window);
+      return false; // Don't repeat
+    });
   }
 
   _checkWindowRules(window)
   {
+    // Skip invalid windows
+    if (!window) {
+      return;
+    }
+
+    // Skip windows that are being destroyed or are invalid
+    try {
+      if (window.get_display() === null || !window.get_workspace()) {
+        return;
+      }
+    } catch (e) {
+      // Window is being destroyed
+      return;
+    }
+
+    // Skip windows that aren't fully initialized yet
+    if (!window.title && !window.get_wm_class()) {
+      return;
+    }
+
     const rules = this.settings.get_value('window-rules').deep_unpack();
     
     if (rules.length === 0) {
       // No rules configured, remove any existing window rules
-      if (window._hasWindowRules) {
+      let windowData = this._windowData.get(window);
+      if (windowData && windowData.hasRules) {
         if (window.above)
           window.unmake_above();
         if (window.on_all_workspaces)
           window.unstick();
-        window._hasWindowRules = null;
+        windowData.hasRules = false;
       }
       return;
     }
@@ -164,38 +205,53 @@ export default class WindowRules extends Extension
       }
     }
 
+    let windowData = this._windowData.get(window);
+    if (!windowData) return;
+
     if (matchedRule) {
-      window._hasWindowRules = true;
+      windowData.hasRules = true;
+      //log(`Window Rules: Applying rules to ${window.title || 'Unknown'}: sticky=${matchedRule.sticky}, above=${matchedRule.above}`);
 
-      // Apply sticky behavior
-      if (matchedRule.sticky) {
-        if (!window.on_all_workspaces) {
-          window.stick();
+      try {
+        // Apply sticky behavior
+        if (matchedRule.sticky) {
+          if (!window.on_all_workspaces) {
+            window.stick();
+          }
+        } else {
+          if (window.on_all_workspaces) {
+            window.unstick();
+          }
         }
-      } else {
-        if (window.on_all_workspaces) {
-          window.unstick();
-        }
-      }
 
-      // Apply above behavior
-      if (matchedRule.above) {
-        if (!window.above) {
-          window.make_above();
+        // Apply above behavior
+        if (matchedRule.above) {
+          if (!window.above) {
+            window.make_above();
+          }
+        } else {
+          if (window.above) {
+            window.unmake_above();
+          }
         }
-      } else {
-        if (window.above) {
-          window.unmake_above();
-        }
+      } catch (e) {
+        log(`Window Rules: Error applying rules to ${window.title || 'Unknown'}: ${e.message}`);
+        // Don't mark as having rules if we couldn't apply them
+        windowData.hasRules = false;
       }
     } else {
       // No matching rule, remove any existing window rules
-      if (window._hasWindowRules) {
-        if (window.above)
-          window.unmake_above();
-        if (window.on_all_workspaces)
-          window.unstick();
-        window._hasWindowRules = null;
+      if (windowData.hasRules) {
+        //log(`Window Rules: Removing rules from ${window.title || 'Unknown'}`);
+        try {
+          if (window.above)
+            window.unmake_above();
+          if (window.on_all_workspaces)
+            window.unstick();
+        } catch (e) {
+          log(`Window Rules: Error removing rules from ${window.title || 'Unknown'}: ${e.message}`);
+        }
+        windowData.hasRules = false;
       }
     }
   }
