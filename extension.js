@@ -37,9 +37,16 @@ export default class WindowRules extends Extension
 
     // Clean up all timeout sources from WeakMap
     if (this._windowData) {
-      for (let [window, windowData] of this._windowData) {
-        if (windowData.timeoutId) {
-          GLib.source_remove(windowData.timeoutId);
+      let actors = global.get_window_actors();
+      if (actors) {
+        for (let actor of actors) {
+          let window = actor.meta_window;
+          if (!window) continue;
+
+          let windowData = this._windowData.get(window);
+          if (windowData && windowData.timeoutId) {
+            GLib.source_remove(windowData.timeoutId);
+          }
         }
       }
     }
