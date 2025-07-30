@@ -10,6 +10,11 @@ export default class WindowRulesPrefs extends ExtensionPreferences {
         const settings = this.getSettings();
         this.settings = settings;
 
+        // Clean up settings when preferences window is closed
+        window.connect('close-request', () => {
+            this.settings = null;
+        });
+
         const page = new Adw.PreferencesPage();
         const group = new Adw.PreferencesGroup({
             title: 'Window Rules',

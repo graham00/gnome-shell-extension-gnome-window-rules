@@ -43,11 +43,19 @@ export default class WindowRules extends Extension
         if (!window) continue;
 
         let windowData = this._windowData.get(window);
-        if (windowData && windowData.notifyId) {
-          try {
-            window.disconnect(windowData.notifyId);
-          } catch (e) {
-            // Window might be destroyed, ignore errors
+        if (windowData) {
+          // Disconnect window signals
+          if (windowData.notifyId) {
+            try {
+              window.disconnect(windowData.notifyId);
+            } catch (e) {
+              // Window might be destroyed, ignore errors
+            }
+          }
+          
+          // Remove timeout sources
+          if (windowData.timeoutId) {
+            GLib.source_remove(windowData.timeoutId);
           }
         }
       }
@@ -109,7 +117,8 @@ export default class WindowRules extends Extension
     if (!windowData) {
       windowData = {
         notifyId: 0,
-        hasRules: false
+        hasRules: false,
+        timeoutId: 0
       };
       this._windowData.set(window, windowData);
     }
@@ -121,14 +130,21 @@ export default class WindowRules extends Extension
           'notify::title', this._checkWindowRules.bind(this));
       } catch (e) {
         // Window might be destroyed, ignore errors
-        log(`Window Rules: Error connecting to window signal: ${e.message}`);
+        console.log(`Window Rules: Error connecting to window signal: ${e.message}`);
         return;
       }
     }
 
+    // Remove existing timeout if any
+    if (windowData.timeoutId) {
+      GLib.source_remove(windowData.timeoutId);
+      windowData.timeoutId = 0;
+    }
+
     // Apply rules after a short delay to ensure window is fully initialized
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+    windowData.timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
       this._checkWindowRules(window);
+      windowData.timeoutId = 0;
       return false; // Don't repeat
     });
   }
@@ -200,7 +216,7 @@ export default class WindowRules extends Extension
           break;
         }
       } catch (e) {
-        log(`Window Rules: Invalid regex pattern "${pattern}": ${e.message}`);
+        console.log(`Window Rules: Invalid regex pattern "${pattern}": ${e.message}`);
         continue;
       }
     }
@@ -235,7 +251,7 @@ export default class WindowRules extends Extension
           }
         }
       } catch (e) {
-        log(`Window Rules: Error applying rules to ${window.title || 'Unknown'}: ${e.message}`);
+        console.log(`Window Rules: Error applying rules to ${window.title || 'Unknown'}: ${e.message}`);
         // Don't mark as having rules if we couldn't apply them
         windowData.hasRules = false;
       }
@@ -243,13 +259,14 @@ export default class WindowRules extends Extension
       // No matching rule, remove any existing window rules
       if (windowData.hasRules) {
         //log(`Window Rules: Removing rules from ${window.title || 'Unknown'}`);
+        console.log(`Window Rules: Removing rules from ${window.title || 'Unknown'}`);
         try {
           if (window.above)
             window.unmake_above();
           if (window.on_all_workspaces)
             window.unstick();
         } catch (e) {
-          log(`Window Rules: Error removing rules from ${window.title || 'Unknown'}: ${e.message}`);
+          console.log(`Window Rules: Error removing rules from ${window.title || 'Unknown'}: ${e.message}`);
         }
         windowData.hasRules = false;
       }
