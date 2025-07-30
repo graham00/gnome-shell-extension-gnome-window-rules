@@ -35,6 +35,15 @@ export default class WindowRules extends Extension
     global.window_manager.disconnect(this._switchWorkspaceId);
     global.display.disconnect(this._displayWindowCreatedId);
 
+    // Clean up all timeout sources from WeakMap
+    if (this._windowData) {
+      for (let [window, windowData] of this._windowData) {
+        if (windowData.timeoutId) {
+          GLib.source_remove(windowData.timeoutId);
+        }
+      }
+    }
+
     // Clean up all window signal connections
     let actors = global.get_window_actors();
     if (actors) {
@@ -51,11 +60,6 @@ export default class WindowRules extends Extension
             } catch (e) {
               // Window might be destroyed, ignore errors
             }
-          }
-          
-          // Remove timeout sources
-          if (windowData.timeoutId) {
-            GLib.source_remove(windowData.timeoutId);
           }
         }
       }
